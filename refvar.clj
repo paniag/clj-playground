@@ -1,4 +1,5 @@
 (import '(java.util.concurrent Executors))
+
 (defn test-stm [nitems nthreads niters]
   (let [refs (map ref (replicate nitems 0))
         pool (Executors/newFixedThreadPool nthreads)

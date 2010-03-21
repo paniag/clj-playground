@@ -4,8 +4,9 @@
 
 (def dim 8)
 
-;initial board structure
-(def initial-board
+(def
+  #^{:doc "Standard Othello starting configuration."}
+  initial-board
   (assoc
     (reduce
       (fn [b l]
@@ -17,63 +18,85 @@
     [3 4] :black
     [4 3] :black))
 
-;dirs are 0-7, starting at north and going clockwise
-;these are the deltas in order to move one step in given dir
-(defn dir-delta [x] ({0 [0 -1]
-                      1 [1 -1]
-                      2 [1 0]
-                      3 [1 1]
-                      4 [0 1]
-                      5 [-1 1]
-                      6 [-1 0]
-                      7 [-1 -1]}
-                     (mod x 8)))
+(defn piece-at-loc
+  "Returns piece at location loc on board, or nil if loc is invalid."
+  ([board loc]
+    (board loc)))
 
-(defn check-bounds [[x y]]
-  (if (and (< x dim) (<= 0 x) (< y dim) (<= 0 y))
-    true
-    false))
+;WARNING: unchecked indexing
+(defn claim-loc
+  "Returns a modification of board in which the piece at loc belongs to player."
+  ([board player loc]
+    (assoc board loc player)))
 
-(defn delta-loc 
-  "returns the location one step in the given dir, or nil if dir moves off edge of board"
-  [[x y] dir]
-    (let [[dx dy] (dir-delta dir)
+(defn dir-delta
+  "Maps a direction 0-7 to a pair [dx dy] defining the direction."
+  ([x] ({0 [0 -1]
+         1 [1 -1]
+         2 [1 0]
+         3 [1 1]
+         4 [0 1]
+         5 [-1 1]
+         6 [-1 0]
+         7 [-1 -1]}
+        (mod x 8))))
+
+(defn valid-loc?
+  "Validates a location, returning loc if valid and nil otherwise."
+  ([loc]
+    (let [[x y] loc]
+      (when (and (<= 0 x) (< x dim)
+                 (<= 0 y) (< y dim))
+        loc))))
+
+(defn neighbor 
+  "Returns the location one step in direction dir, or nil if the new location is invalid."
+  ([loc dir]
+    (let [[x y]   loc
+          [dx dy] (dir-delta dir)
           [nx ny] [(+ x dx) (+ y dy)]]
-      (when (check-bounds [nx ny])
-        [nx ny])))
+      (valid-loc? [nx ny]))))
 
-;argument should either be :white or :black
-(defn other [p]
-  (if (= p :white)
-    :black
-    :white))
+(defn other
+  "Returns the symbol representing player's opponent, or nil if the symbol player is invalid."
+  ([player]
+    (some (when (= player :white) :black)
+          (when (= player :black) :white))))
 
 ;
 ; BOARD INSPECTION: valid moves, heuristics, etc
 ;
 
-(defn is-blank [board loc]
-  (= :empty (board loc)))
+(defn is-blank?
+  "True if neither player has a piece at loc on board, false otherwise."
+  ([board loc]
+    (= :empty (piece-at-loc board loc))))
 
-(defn is-own [board player loc]
-  (= player (board loc)))
+(defn is-own?
+  "True if player has a piece at loc on board, false otherwise."
+  ([board player loc]
+    (= player (piece-at-loc board loc))))
 
-(defn is-opponent [board player loc]
-  (= (other player) (board loc)))
+(defn is-opponent?
+  "True if player's opponent has a piece at loc on board, false otherwise."
+  ([board player loc]
+    (is-own? board (other player) loc)))
 
 ;check if specific move exists
 ;caller has validated that loc is on the board and that space is blank
-(defn valid-directed-move? [board player loc dir]
-  (let [new-loc (delta-loc loc dir)]
-    (when (and
-            (is-blank board loc)
-            new-loc
-            (is-opponent board player new-loc))
-      (loop [loc (delta-loc new-loc dir)]
-          (when loc
-            (if (is-opponent board player loc)
-              (recur (delta-loc loc dir))
-              (is-own board player loc)))))))
+(defn valid-directed-move?
+  "Checks whether any opponent pieces in direction dir would be captured if player
+  put a piece at loc. Returns true if pieces would be captured, or false otherwise.
+  
+  Note: Assumes loc is empty."
+  ([board player loc dir]
+    (let [new-loc (neighbor loc dir)]
+      (and new-loc
+           (is-opponent? board player new-loc)
+           (loop [new-loc (neighbor new-loc dir)]
+             (if (and new-loc (is-opponent? board player new-loc))
+               (recur (neighbor new-loc dir))
+               (is-own? board player new-loc)))))))
 
 (defn valid-move? [board player loc]
   (let [result (some #(valid-directed-move? board player loc %)
@@ -82,8 +105,8 @@
 
 ;collection of all valid moves
 (defn all-moves [board player]
-  (filter (fn [x] x)
-          (for [row (range 8) col (range 8)]
+  (filter identity
+          (for [row (range dim) col (range dim)]
             (valid-move? board player [row col]))))
 
 ;
@@ -95,22 +118,22 @@
   (let [result
         (loop [board b
                start s]
-          (if (and start (is-opponent board player start))
-            (recur (assoc board start player)
-                   (delta-loc start dir))
+          (if (and start (is-opponent? board player start))
+            (recur (claim-loc board player start)
+                   (neighbor start dir))
             [board start]))
         new-board (first result)
         final-loc (second result)]
-    (if (and final-loc (is-own new-board player final-loc))
+    (if (and final-loc (is-own? new-board player final-loc))
       new-board
       b)))
 
 ;assumes move is valid
-(defn apply-move [board player move]
-  (if move
+(defn apply-move [board player loc]
+  (if loc
     (reduce (fn [b d]
-              (claim-pieces b player (delta-loc move d) d))
-            (assoc board move player)
+              (claim-pieces b player (neighbor loc d) d))
+            (claim-loc board player loc)
             (range 8))
     board))
 
@@ -135,33 +158,37 @@
   (iterate face-off-turn [b p s]))
 
 ;
-; SILLY STUFF
+; DISPLAY
 ;
 
-(def to-char {:empty "-" :white "X" :black "O"})
+(def to-char {:empty "_" :white "O" :black "*"})
 
 (defn show-board [board]
   (println (with-out-str
            (dotimes [x 8]
              (println (reduce (fn [a b] (str a b))
                           (for [y (range 8)]
-                            (to-char (board [x y]))))))))
+                            (to-char (piece-at-loc board [x y]))))))))
   (flush))
 
-(defn show-game [game n]
+(defn show-turn [game n]
   (show-board (first (nth game n))))
 
-(defn show-turns [game n t]
-  (dotimes [i (inc n)] (show-game game i) (. Thread (sleep t))))
+(defn show-game [game n t]
+  (dotimes [i (inc n)] (show-turn game i) (. Thread (sleep t))))
 
-(def game (face-off-game initial-board :white {:white first-valid-move :black first-valid-move}))
+;
+; CONVENIENCES
+;
 
-(def game2 (face-off-game initial-board :black {:white first-valid-move :black first-valid-move}))
+(defn game1 [] (face-off-game initial-board :white {:white first-valid-move :black first-valid-move}))
 
-(def game3 (face-off-game initial-board :white {:white random-move :black random-move}))
+(defn game2 [] (face-off-game initial-board :black {:white first-valid-move :black first-valid-move}))
 
-(def game4 (face-off-game initial-board :black {:white random-move :black random-move}))
+(defn game3 [] (face-off-game initial-board :white {:white random-move :black random-move}))
 
-(def game5 (face-off-game initial-board :white {:white random-move :black first-valid-move}))
+(defn game4 [] (face-off-game initial-board :black {:white random-move :black random-move}))
 
-(def game6 (face-off-game initial-board :black {:white random-move :black first-valid-move}))
+(defn game5 [] (face-off-game initial-board :white {:white random-move :black first-valid-move}))
+
+(defn game6 [] (face-off-game initial-board :black {:white random-move :black first-valid-move}))
